@@ -10,9 +10,9 @@
 				     [[[0.25, 0.75], 1]]
 				    ],
 	  "sublattice_configurations": [[["CU", "MG"], "VA"],
-					[["CU", "MG"], "VA"],
-					[["CU", "MG"], "VA"]
-				],
+					                        [["CU", "MG"], "VA"],
+					                        [["CU", "MG"], "VA"]
+				                         ]
   },
   "conditions": {
 	  "P": 101325,
