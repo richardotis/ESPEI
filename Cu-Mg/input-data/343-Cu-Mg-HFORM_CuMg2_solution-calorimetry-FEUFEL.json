@@ -1,6 +1,6 @@
 {
-  "components": ["CU", "MG", "VA"],
-  "phases": ["LAVES_C15"],
+  "components": ["CU", "MG"],
+  "phases": ["CUMG2"],
   "solver": {
     "mode": "manual",
     "sublattice_site_ratios": [1, 2],
@@ -11,6 +11,6 @@
     "T": 299
   },
   "output": "HM_FORM",
-  "values":   [[[-12700]]],
+  "values":   [[[-9800]]],
   "reference": "Calorimetry - FEUFEL"
 }
