@@ -1,5 +1,5 @@
 {
-  "components": ["CU", "MG"],
+  "components": ["CU", "MG", "VA"],
   "phases": ["HCP_A3"],
   "solver": {
 	  "mode": "manual",
