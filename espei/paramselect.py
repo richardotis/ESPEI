@@ -38,6 +38,7 @@ from collections import OrderedDict, defaultdict
 from pycalphad import calculate, equilibrium, Database, Model, CompiledModel, \
     variables as v
 from sklearn.linear_model import LinearRegression
+from numpy.linalg import LinAlgError
 
 from espei.core_utils import get_data, get_samples, canonicalize, canonical_sort_key, \
     list_to_tuple, endmembers_from_interaction, build_sitefractions
@@ -528,7 +529,7 @@ def tieline_error(dbf, comps, current_phase, cond_dict, region_chemical_potentia
                     f.write(template_error.format(dbf.to_string(fmt='tdb'), comps, [current_phase], cond_dict, {key: float(x) for key, x in parameters.items()}))
         # Sometimes we can get a miscibility gap in our "single-phase" calculation
         # Choose the weighted mixture of site fractions
-            logging.warning('Dropping condition due to calculation failure: ', cond_dict)
+            logging.warning('Dropping condition due to calculation failure: {}'.format(cond_dict))
             return 0
         select_energy = float(single_eqdata['GM'].values)
         region_comps = []
@@ -545,7 +546,7 @@ def multi_phase_fit(dbf, comps, phases, datasets, phase_models, parameters=None,
     # TODO: support distributed schedulers for multi_phase_fit.
     # This can be done if the scheduler passed is a distributed.worker_client
     if scheduler is not dask.local:
-        raise ValueError('Schedulers other than dask.local are not currently supported for multiphase fitting.')
+        raise NotImplementedError('Schedulers other than dask.local are not currently supported for multiphase fitting.')
     desired_data = datasets.search((tinydb.where('output') == 'ZPF') &
                                    (tinydb.where('components').test(lambda x: set(x).issubset(comps))) &
                                    (tinydb.where('phases').test(lambda x: len(set(phases).intersection(x)) > 0)))
@@ -611,7 +612,7 @@ def lnprob(params, data=None, comps=None, dbf=None, phases=None, datasets=None,
     try:
         iter_error = multi_phase_fit(dbf, comps, phases, datasets, phase_models,
                                      parameters=parameters, scheduler=scheduler)
-    except ValueError as e:
+    except (ValueError, LinAlgError) as e:
         iter_error = [np.inf]
     iter_error = [np.inf if np.isnan(x) else x ** 2 for x in iter_error]
     iter_error = -np.sum(iter_error)
@@ -619,7 +620,7 @@ def lnprob(params, data=None, comps=None, dbf=None, phases=None, datasets=None,
 
 
 def fit(input_fname, datasets, resume=None, scheduler=None, run_mcmc=True,
-        tracefile=None, mcmc_steps=1000, save_interval=100):
+        tracefile=None, probfile=None, mcmc_steps=1000, save_interval=100):
     """Fit thermodynamic and phase equilibria data to a model.
     
     Parameters
@@ -638,6 +639,8 @@ def fit(input_fname, datasets, resume=None, scheduler=None, run_mcmc=True,
         first-principles (single-phase only) runs.
     tracefile : str
         filename to store the flattened chain with NumPy.savetxt
+    probfile : str
+        filename to store the flattened ln probability with NumPy.savetxt
     mcmc_steps : int
         number of chain steps to calculate in MCMC. Note the flattened chain will
         have (mcmc_steps*DOF) values.
@@ -729,10 +732,13 @@ def fit(input_fname, datasets, resume=None, scheduler=None, run_mcmc=True,
                          'phase_models': phase_models}
 
 
-        def save_tracefile(sampler):
+        def save_sampler_state(sampler):
             if tracefile:
                 logging.debug('Writing chain to {}'.format(tracefile))
                 np.savetxt(tracefile, sampler.flatchain)
+            if probfile:
+                logging.debug('Writing lnprob to {}'.format(probfile))
+                np.savetxt(probfile, sampler.flatlnprobability)
 
         # initialize the RNG
         rng = np.random.RandomState(1769)
@@ -754,7 +760,8 @@ def fit(input_fname, datasets, resume=None, scheduler=None, run_mcmc=True,
             for i, result in enumerate(sampler.sample(walkers, iterations=mcmc_steps)):
                 # progress bar
                 if (i+1) % save_interval == 0:
-                    save_tracefile(sampler)
+                    save_sampler_state(sampler)
+                    logging.debug('Acceptance ratios for parameters: {}'.format(sampler.acceptance_fraction))
                 n = int((progbar_width + 1) * float(i) / mcmc_steps)
                 sys.stdout.write("\r[{0}{1}] ({2} of {3})\n".format('#' * n, ' ' * (progbar_width - n), i+1, mcmc_steps))
             n = int((progbar_width + 1) * float(i+1) / mcmc_steps)
@@ -763,8 +770,8 @@ def fit(input_fname, datasets, resume=None, scheduler=None, run_mcmc=True,
             pass
 
         flatchain = sampler.flatchain
-        save_tracefile(sampler)
-        optimal_parameters = np.mean(flatchain, axis=0)
+        save_sampler_state(sampler)
+        optimal_parameters = flatchain[np.nanargmin(-sampler.flatlnprobability)]
         logging.debug('Intial parameters: {}'.format(initial_parameters))
         logging.debug('Optimal parameters: {}'.format(optimal_parameters))
         logging.debug('Change in parameters: {}'.format(np.abs(initial_parameters - optimal_parameters) / initial_parameters))
