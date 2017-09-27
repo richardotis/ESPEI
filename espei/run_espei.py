@@ -9,16 +9,12 @@ from __future__ import print_function
 import os
 import argparse
 import logging
-import multiprocessing
 import sys
 import json
 
-import numpy as np
 import yaml
-from pycalphad import Database
 
 from espei import fit, schema
-from espei.utils import ImmediateClient
 from espei.datasets import DatasetError, load_datasets, recursive_glob
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -107,28 +103,16 @@ def main():
     generate_parameters_settings = run_settings.get('generate_parameters')
     mcmc_settings = run_settings.get('mcmc')
 
-
     # handle verbosity
     verbosity = {0: logging.WARNING,
                  1: logging.INFO,
                  2: logging.DEBUG}
     logging.basicConfig(level=verbosity[output_settings['verbosity']])
 
-    # load datasets and handle i/o
-    logging.debug('Loading and checking datasets.')
-    datasets = load_datasets(sorted(recursive_glob(system_settings['datasets'], '*.json')))
-    logging.debug('Finished checking datasets')
-    tracefile = output_settings['tracefile']
-    probfile = output_settings['probfile']
+    # we are handling mcmc settings first so we can get to the scheduler as fast as possible, improving startup time on MPI
     # check that the MCMC output files do not already exist
     # only matters if we are actually running MCMC
     if mcmc_settings is not None:
-        if os.path.exists(tracefile):
-            raise OSError('Tracefile "{}" exists and would be overwritten by a new run. Use the ``output.tracefile`` setting to set a different name.'.format(tracefile))
-        if os.path.exists(probfile):
-            raise OSError('Probfile "{}" exists and would be overwritten by a new run. Use the ``output.probfile`` setting to set a different name.'.format(probfile))
-        mcmc_steps = mcmc_settings.get('mcmc_steps')
-        save_interval = mcmc_settings.get('mcmc_save_interval')
         # scheduler setup
         if mcmc_settings['scheduler'] == 'MPIPool':
             from emcee.utils import MPIPool
@@ -141,6 +125,8 @@ def main():
                 sys.exit(0)
             logging.info("Using MPIPool on {} MPI ranks".format(client.size))
         elif mcmc_settings['scheduler'] == 'dask':
+            import multiprocessing
+            from espei.utils import ImmediateClient
             from distributed import LocalCluster
             scheduler = LocalCluster(
                 n_workers=int(multiprocessing.cpu_count()),
@@ -154,11 +140,23 @@ def main():
                         client.scheduler_info()['services']['bokeh']))
             except KeyError:
                 logging.info("Install bokeh to use the dask bokeh server.")
+
+        tracefile = output_settings['tracefile']
+        probfile = output_settings['probfile']
+        if os.path.exists(tracefile):
+            raise OSError('Tracefile "{}" exists and would be overwritten by a new run. Use the ``output.tracefile`` setting to set a different name.'.format(tracefile))
+        if os.path.exists(probfile):
+            raise OSError('Probfile "{}" exists and would be overwritten by a new run. Use the ``output.probfile`` setting to set a different name.'.format(probfile))
+
+        mcmc_steps = mcmc_settings.get('mcmc_steps')
+        save_interval = mcmc_settings.get('mcmc_save_interval')
         if mcmc_settings.get('input_db'):
+            from pycalphad import Database
             resume_tdb = Database(mcmc_settings.get('input_db'))
         else:
             resume_tdb = None
         if mcmc_settings.get('restart_chain'):
+            import numpy as np
             restart_chain = np.load(mcmc_settings.get('restart_chain'))
         else:
             restart_chain = None
@@ -172,6 +170,12 @@ def main():
         client = None
         chains_per_parameter = None
         chain_std_deviation = None
+
+    # load datasets and handle i/o
+    logging.debug('Loading and checking datasets.')
+    datasets = load_datasets(sorted(recursive_glob(system_settings['datasets'], '*.json')))
+    logging.debug('Finished checking datasets')
+
 
     dbf, sampler, parameters = fit(system_settings['phase_models'], datasets, scheduler=client,
                                    tracefile=tracefile, probfile=probfile,
