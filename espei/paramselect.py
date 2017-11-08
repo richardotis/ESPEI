@@ -462,6 +462,8 @@ def estimate_hyperplane(dbf, comps, phases, current_statevars, comp_dicts, phase
             # Note that we consider all phases in the system, not just ones in this tie region
             multi_eqdata = equilibrium(dbf, comps, phases, cond_dict, verbose=False,
                                        model=phase_models, scheduler=dask.local.get_sync, parameters=parameters)
+            if np.any(np.isnan(multi_eqdata['MU'].values)):
+                return np.full_like(multi_eqdata['MU'].values, np.nan)
             # Does there exist only a single phase in the result with zero internal degrees of freedom?
             # We should exclude those chemical potentials from the average because they are meaningless.
             num_phases = len(np.squeeze(multi_eqdata['Phase'].values != ''))
@@ -476,6 +478,8 @@ def estimate_hyperplane(dbf, comps, phases, current_statevars, comp_dicts, phase
 
 def tieline_error(dbf, comps, current_phase, cond_dict, region_chemical_potentials, phase_flag,
                   phase_models, parameters, debug_mode=False):
+    if np.any(np.isnan(region_chemical_potentials)):
+        return np.inf
     if np.any(np.isnan(list(cond_dict.values()))):
         # We don't actually know the phase composition here, so we estimate it
         single_eqdata = calculate(dbf, comps, [current_phase],
