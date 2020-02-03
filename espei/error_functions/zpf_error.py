@@ -28,6 +28,14 @@ from pycalphad.core.utils import instantiate_models, filter_phases, unpack_compo
 from pycalphad.core.phase_rec import PhaseRecord
 from espei.utils import PickleableTinyDB
 from espei.shadow_functions import equilibrium_, calculate_, no_op_equilibrium_, update_phase_record_parameters
+from pycalphad.core.solver import SundmanSolver
+
+
+class ProblemSaver(SundmanSolver):
+    def solve(self, prob):
+        result = super(ProblemSaver, self).solve(prob)
+        self.chempot_gradient = np.ascontiguousarray(prob.chemical_potential_parameter_gradient(result.x))
+        return result
 
 def _safe_index(items, index):
     try:
@@ -164,6 +172,7 @@ def estimate_hyperplane(phase_region: PhaseRegion, parameters: np.ndarray, appro
     else:
         _equilibrium = equilibrium_
     target_hyperplane_chempots = []
+    target_hyperplane_chempot_grads = []
     target_hyperplane_phases = []
     dbf = phase_region.dbf
     species = phase_region.species
@@ -182,10 +191,12 @@ def estimate_hyperplane(phase_region: PhaseRegion, parameters: np.ndarray, appro
         else:
             # Extract chemical potential hyperplane from multi-phase calculation
             # Note that we consider all phases in the system, not just ones in this tie region
+            solver = ProblemSaver()
             str_statevar_dict = OrderedDict([(str(key), cond_dict[key]) for key in sorted(phase_region.potential_conds.keys(), key=str)])
             grid = calculate_(dbf, species, phases, str_statevar_dict, models, phase_records, pdens=500, fake_points=True)
-            multi_eqdata = _equilibrium(species, phase_records, cond_dict, grid)
+            multi_eqdata = _equilibrium(species, phase_records, cond_dict, grid, solver)
             target_hyperplane_phases.append(multi_eqdata.Phase.squeeze())
+            target_hyperplane_chempot_grad = solver.chempot_gradient
             # Does there exist only a single phase in the result with zero internal degrees of freedom?
             # We should exclude those chemical potentials from the average because they are meaningless.
             num_phases = np.sum(multi_eqdata.Phase.squeeze() != '')
@@ -194,13 +205,18 @@ def estimate_hyperplane(phase_region: PhaseRegion, parameters: np.ndarray, appro
             MU_values = multi_eqdata.MU.squeeze()
             if (num_phases == 1) and no_internal_dof:
                 target_hyperplane_chempots.append(np.full_like(MU_values, np.nan))
+                target_hyperplane_chempot_grads.append(np.full_like(target_hyperplane_chempot_grad, np.nan))
             else:
                 target_hyperplane_chempots.append(MU_values)
+                target_hyperplane_chempot_grads.append(target_hyperplane_chempot_grad)
     target_hyperplane_mean_chempots = np.nanmean(target_hyperplane_chempots, axis=0, dtype=np.float)
-    return target_hyperplane_mean_chempots
+    target_hyperplane_mean_chempots_grad = np.nanmean(target_hyperplane_chempot_grads, axis=0, dtype=np.float)
+    return target_hyperplane_mean_chempots, target_hyperplane_mean_chempots_grad
 
 
-def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray, comps: Sequence[str],
+def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray,
+                                target_hyperplane_chempot_gradient: np.ndarray,
+                                comps: Sequence[str],
                                 phase_region: PhaseRegion, vertex_idx: int,
                                 parameters: np.ndarray, approximate_equilibrium: bool = False) -> float:
     """Calculate the integrated driving force between the current hyperplane and target hyperplane.
@@ -222,11 +238,16 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray, comps: S
     for key, val in cond_dict.items():
         if val is None:
             cond_dict[key] = np.nan
+    driving_force_gradient = np.zeros(len(parameters))
     if np.any(np.isnan(list(cond_dict.values()))):
         # We don't actually know the phase composition here, so we estimate it
         single_eqdata = calculate_(dbf, species, [current_phase], str_statevar_dict, models, phase_records, pdens=500)
         df = np.multiply(target_hyperplane_chempots, single_eqdata.X).sum(axis=-1) - single_eqdata.GM
         driving_force = float(df.max())
+        desired_sitefracs = single_eqdata.Y[df.argmax()].squeeze()
+        inp = np.r_[[1, cond_dict[v.P], cond_dict[v.T]], desired_sitefracs, parameters]
+        paramgrad = phase_region.phase_records[current_phase].parameter_gradient(inp)
+        driving_force_gradient = np.multiply(target_hyperplane_chempot_gradient, single_eqdata.X.squeeze()[:, np.newaxis]).sum(axis=0) - paramgrad
     elif phase_flag == 'disordered':
         # Construct disordered sublattice configuration from composition dict
         # Compute energy
@@ -246,12 +267,19 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray, comps: S
             desired_sitefracs[dof_idx:dof_idx + len(dof)] = sitefracs_to_add
             dof_idx += len(dof)
         single_eqdata = calculate_(dbf, species, [current_phase], str_statevar_dict, models, phase_records, pdens=500)
+        # XXX: This should be done using PhaseRecords somehow
+        inp = np.r_[[1, cond_dict[v.P], cond_dict[v.T]], desired_sitefracs, parameters]
+        paramgrad = phase_region.phase_records[current_phase].parameter_gradient(inp)
+        driving_force_gradient = np.multiply(target_hyperplane_chempot_gradient, single_eqdata.X.squeeze()[:, np.newaxis]).sum(
+            axis=0) - paramgrad
         driving_force = np.multiply(target_hyperplane_chempots, single_eqdata.X).sum(axis=-1) - single_eqdata.GM
         driving_force = float(np.squeeze(driving_force))
     else:
         # Extract energies from single-phase calculations
         grid = calculate_(dbf, species, [current_phase], str_statevar_dict, models, phase_records, pdens=500, fake_points=True)
-        single_eqdata = _equilibrium(species, phase_records, cond_dict, grid)
+        solver = ProblemSaver()
+        single_eqdata = _equilibrium(species, phase_records, cond_dict, grid, solver=solver)
+        single_eq_chempot_grad = solver.chempot_gradient
         if np.all(np.isnan(single_eqdata.NP)):
             logging.debug('Calculation failure: all NaN phases with phases: {}, conditions: {}, parameters {}'.format(current_phase, cond_dict, parameters))
             return np.inf
@@ -262,7 +290,9 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray, comps: S
         region_comps[region_comps.index(np.nan)] = 1 - np.nansum(region_comps)
         driving_force = np.multiply(target_hyperplane_chempots, region_comps).sum() - select_energy
         driving_force = float(driving_force)
-    return driving_force
+        driving_force_gradient = np.multiply((target_hyperplane_chempot_gradient - single_eq_chempot_grad),
+                                             np.array(region_comps)[:, np.newaxis]).sum(axis=0)
+    return driving_force, driving_force_gradient
 
 
 def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
@@ -312,7 +342,7 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
         for phase_region in data['phase_regions']:
             # Calculate the average multiphase hyperplane
             eq_str = "conds: ({}), comps: ({})".format(phase_region.potential_conds, ', '.join(['{}: {}'.format(ph, c) for ph, c in zip(phase_region.region_phases, phase_region.comp_conds)]))
-            target_hyperplane = estimate_hyperplane(phase_region, parameters, approximate_equilibrium=approximate_equilibrium)
+            target_hyperplane, target_hyperplane_gradient = estimate_hyperplane(phase_region, parameters, approximate_equilibrium=approximate_equilibrium)
             if np.any(np.isnan(target_hyperplane)):
                 zero_probs = norm.logpdf(np.zeros(len(phase_region.comp_conds)), loc=0, scale=1000/data_weight/weight)
                 total_zero_prob = np.sum(zero_probs)
@@ -321,10 +351,11 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
                 continue
             # Then calculate the driving force to that hyperplane for each individual vertex
             for vertex_idx in range(len(phase_region.comp_conds)):
-                driving_force = driving_force_to_hyperplane(target_hyperplane, data_comps,
-                                                            phase_region, vertex_idx, parameters,
-                                                            approximate_equilibrium=approximate_equilibrium,
-                                                            )
+                driving_force, driving_force_gradient = driving_force_to_hyperplane(target_hyperplane,
+                                                                                    target_hyperplane_gradient, data_comps,
+                                                                                    phase_region, vertex_idx, parameters,
+                                                                                    approximate_equilibrium=approximate_equilibrium,
+                                                                                    )
                 vertex_prob = norm.logpdf(driving_force, loc=0, scale=1000/data_weight/weight)
                 prob_error += vertex_prob
                 logging.debug('ZPF error - Equilibria: ({}), current phase: {}, driving force: {}, probability: {}, reference: {}'.format(eq_str, phase_region.region_phases[vertex_idx], driving_force, vertex_prob, dataset_ref))

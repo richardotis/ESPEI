@@ -7,6 +7,7 @@ from collections import OrderedDict
 from typing import Sequence, Dict, Optional
 import numpy as np
 from pycalphad import Database, Model, variables as v
+from pycalphad.core.solver import SolverBase
 from pycalphad.core.phase_rec import PhaseRecord
 from pycalphad.core.starting_point import starting_point
 from pycalphad.core.eqsolver import _solve_eq_at_conditions
@@ -75,7 +76,8 @@ def calculate_(dbf: Database, species: Sequence[v.Species], phases: Sequence[str
 
 
 def equilibrium_(species: Sequence[v.Species], phase_records: Dict[str, PhaseRecord],
-                 conditions: Dict[v.StateVariable, np.ndarray], grid: LightDataset
+                 conditions: Dict[v.StateVariable, np.ndarray], grid: LightDataset,
+                 solver: SolverBase,
                  ) -> LightDataset:
     """
     Perform a fast equilibrium calculation with virtually no overhead.
@@ -84,7 +86,7 @@ def equilibrium_(species: Sequence[v.Species], phase_records: Dict[str, PhaseRec
     conditions = _adjust_conditions(conditions)
     str_conds = OrderedDict([(str(ky), conditions[ky]) for ky in sorted(conditions.keys(), key=str)])
     start_point = starting_point(conditions, statevars, phase_records, grid)
-    return _solve_eq_at_conditions(species, start_point, phase_records, grid, str_conds, statevars, False)
+    return _solve_eq_at_conditions(species, start_point, phase_records, grid, str_conds, statevars, False, solver=solver)
 
 
 def no_op_equilibrium_(_, phase_records: Dict[str, PhaseRecord],
