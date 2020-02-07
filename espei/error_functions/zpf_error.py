@@ -259,7 +259,7 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray,
         for c in dbf.phases[current_phase].constituents:
             dof = sorted(set(c).intersection(comps))
             if (len(dof) == 1) and (dof[0] == 'VA'):
-                return 0
+                return 0, driving_force_gradient
             # If it's disordered config of BCC_B2 with VA, disordered config is tiny vacancy count
             sitefracs_to_add = np.array([cond_dict.get(v.X(d)) for d in dof], dtype=np.float)
             # Fix composition of dependent component
@@ -282,7 +282,7 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray,
         single_eq_chempot_grad = solver.chempot_gradient
         if np.all(np.isnan(single_eqdata.NP)):
             logging.debug('Calculation failure: all NaN phases with phases: {}, conditions: {}, parameters {}'.format(current_phase, cond_dict, parameters))
-            return np.inf
+            return np.inf, driving_force_gradient
         select_energy = float(single_eqdata.GM)
         region_comps = []
         for comp in [c for c in sorted(comps) if c != 'VA']:
@@ -322,6 +322,8 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
     -------
     float
         Log probability of ZPF error
+    np.ndarray
+        Log probability gradient of ZPF error
 
     Notes
     -----
@@ -334,6 +336,7 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
     if parameters is None:
         parameters = np.array([])
     prob_error = 0.0
+    prob_error_gradient = np.zeros(len(parameters))
     for data in zpf_data:
         data_comps = data['data_comps']
         weight = data['weight']
@@ -357,8 +360,9 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
                                                                                     approximate_equilibrium=approximate_equilibrium,
                                                                                     )
                 vertex_prob = norm.logpdf(driving_force, loc=0, scale=1000/data_weight/weight)
+                prob_error_gradient += -driving_force_gradient * driving_force / (1000/data_weight/weight)**2
                 prob_error += vertex_prob
                 logging.debug('ZPF error - Equilibria: ({}), current phase: {}, driving force: {}, probability: {}, reference: {}'.format(eq_str, phase_region.region_phases[vertex_idx], driving_force, vertex_prob, dataset_ref))
     if np.isnan(prob_error):
-        return -np.inf
+        return -np.inf, prob_error_gradient
     return prob_error

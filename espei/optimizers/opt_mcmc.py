@@ -286,7 +286,7 @@ class EmceeOptimizer(OptimizerBase):
         starttime = time.time()
         if zpf_kwargs is not None:
             try:
-                multi_phase_error = calculate_zpf_error(parameters=np.array(params), **zpf_kwargs)
+                multi_phase_error, multi_phase_error_gradient = calculate_zpf_error(parameters=np.array(params), **zpf_kwargs)
             except (ValueError, np.linalg.LinAlgError) as e:
                 raise e
                 print(e)
@@ -297,8 +297,11 @@ class EmceeOptimizer(OptimizerBase):
             eq_thermochemical_prob = calculate_equilibrium_thermochemical_probability(parameters=np.array(params), **equilibrium_thermochemical_kwargs)
         else:
             eq_thermochemical_prob = 0
+            multi_phase_error_gradient = np.zeros(len(parameters))
         if activity_kwargs is not None:
-            actvity_error = calculate_activity_error(parameters=parameters, **activity_kwargs)
+            activity_error = calculate_activity_error(parameters=parameters, **activity_kwargs)
+            # TODO
+            activity_error_gradient = np.zeros(len(parameters))
         else:
             actvity_error = 0
         if non_equilibrium_thermochemical_kwargs is not None:
