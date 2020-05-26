@@ -244,10 +244,12 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray,
         single_eqdata = calculate_(dbf, species, [current_phase], str_statevar_dict, models, phase_records, pdens=500)
         df = np.multiply(target_hyperplane_chempots, single_eqdata.X).sum(axis=-1) - single_eqdata.GM
         driving_force = float(df.max())
-        desired_sitefracs = single_eqdata.Y[df.argmax()].squeeze()
+        df_idx = df.argmax()
+        desired_sitefracs = single_eqdata.Y[..., df_idx, :].squeeze()
         inp = np.r_[[1, cond_dict[v.P], cond_dict[v.T]], desired_sitefracs, parameters]
         paramgrad = phase_region.phase_records[current_phase].parameter_gradient(inp)
-        driving_force_gradient = np.multiply(target_hyperplane_chempot_gradient, single_eqdata.X.squeeze()[:, np.newaxis]).sum(axis=0) - paramgrad
+        driving_force_gradient = np.multiply(target_hyperplane_chempot_gradient,
+                                             single_eqdata.X[..., df_idx, :].squeeze()[:, np.newaxis]).sum(axis=0) - paramgrad
     elif phase_flag == 'disordered':
         # Construct disordered sublattice configuration from composition dict
         # Compute energy
