@@ -122,8 +122,6 @@ def plot_parameters(dbf, comps, phase_name, configuration, symmetry, datasets=No
 def dataplot(comps, phases, conds, datasets, ax=None, plot_kwargs=None, tieline_plot_kwargs=None):
     """
     Plot datapoints corresponding to the components, phases, and conditions.
-
-
     Parameters
     ----------
     comps : list
@@ -139,15 +137,12 @@ def dataplot(comps, phases, conds, datasets, ax=None, plot_kwargs=None, tieline_
         Additional keyword arguments to pass to the matplotlib plot function for points
     tieline_plot_kwargs : dict
         Additional keyword arguments to pass to the matplotlib plot function for tielines
-
     Returns
     -------
     matplotlib.Axes
         A plot of phase equilibria points as a figure
-
     Examples
     --------
-
     >>> from espei.datasets import load_datasets, recursive_glob  # doctest: +SKIP
     >>> from espei.plot import dataplot  # doctest: +SKIP
     >>> datasets = load_datasets(recursive_glob('.', '*.json'))  # doctest: +SKIP
@@ -155,7 +150,6 @@ def dataplot(comps, phases, conds, datasets, ax=None, plot_kwargs=None, tieline_
     >>> my_components = ['CU', 'MG' 'VA']  # doctest: +SKIP
     >>> conditions = {v.P: 101325, v.T: (500, 1000, 10), v.X('MG'): (0, 1, 0.01)}  # doctest: +SKIP
     >>> dataplot(my_components, my_phases, conditions, datasets)  # doctest: +SKIP
-
     """
     indep_comps = [key for key, value in conds.items() if isinstance(key, v.X) and len(np.atleast_1d(value)) > 1]
     indep_pots = [key for key, value in conds.items() if ((key == v.T) or (key == v.P)) and len(np.atleast_1d(value)) > 1]
