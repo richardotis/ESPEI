@@ -247,7 +247,8 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray,
         df_idx = df.argmax()
         desired_sitefracs = single_eqdata.Y[..., df_idx, :].squeeze()
         inp = np.r_[[1, cond_dict[v.P], cond_dict[v.T]], desired_sitefracs, parameters]
-        paramgrad = phase_region.phase_records[current_phase].parameter_gradient(inp)
+        paramgrad = np.zeros_like(parameters)
+        phase_records[current_phase].parameter_gradient(paramgrad, inp)
         driving_force_gradient = np.multiply(target_hyperplane_chempot_gradient,
                                              single_eqdata.X[..., df_idx, :].squeeze()[:, np.newaxis]).sum(axis=0) - paramgrad
     elif phase_flag == 'disordered':
@@ -271,7 +272,8 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray,
         single_eqdata = calculate_(dbf, species, [current_phase], str_statevar_dict, models, phase_records, pdens=500)
         # XXX: This should be done using PhaseRecords somehow
         inp = np.r_[[1, cond_dict[v.P], cond_dict[v.T]], desired_sitefracs, parameters]
-        paramgrad = phase_region.phase_records[current_phase].parameter_gradient(inp)
+        paramgrad = np.zeros_like(parameters)
+        phase_records[current_phase].parameter_gradient(paramgrad, inp)
         driving_force_gradient = np.multiply(target_hyperplane_chempot_gradient, single_eqdata.X.squeeze()[:, np.newaxis]).sum(
             axis=0) - paramgrad
         driving_force = np.multiply(target_hyperplane_chempots, single_eqdata.X).sum(axis=-1) - single_eqdata.GM
@@ -367,4 +369,4 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
                 logging.debug('ZPF error - Equilibria: ({}), current phase: {}, driving force: {}, probability: {}, reference: {}'.format(eq_str, phase_region.region_phases[vertex_idx], driving_force, vertex_prob, dataset_ref))
     if np.isnan(prob_error):
         return -np.inf, prob_error_gradient
-    return prob_error
+    return prob_error, prob_error_gradient
