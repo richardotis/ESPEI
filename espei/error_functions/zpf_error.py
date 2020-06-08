@@ -339,15 +339,16 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
     """
     if parameters is None:
         parameters = np.array([])
-    prob_error = np.zeros(len(zpf_data))
-    prob_error_gradient = np.zeros((len(zpf_data), len(parameters)))
+    max_phase_regions = max([len(data['phase_regions']) for data in zpf_data])
+    prob_error = np.zeros((len(zpf_data), max_phase_regions))
+    prob_error_gradient = np.zeros((len(zpf_data), max_phase_regions, len(parameters)))
     data_idx = 0
     for data in zpf_data:
         data_comps = data['data_comps']
         weight = data['weight']
         dataset_ref = data['dataset_reference']
         # for the set of phases and corresponding tie-line verticies in equilibrium
-        for phase_region in data['phase_regions']:
+        for phase_region_idx, phase_region in enumerate(data['phase_regions']):
             # Calculate the average multiphase hyperplane
             eq_str = "conds: ({}), comps: ({})".format(phase_region.potential_conds, ', '.join(['{}: {}'.format(ph, c) for ph, c in zip(phase_region.region_phases, phase_region.comp_conds)]))
             target_hyperplane, target_hyperplane_gradient = estimate_hyperplane(phase_region, parameters, approximate_equilibrium=approximate_equilibrium)
@@ -355,7 +356,7 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
                 zero_probs = norm.logpdf(np.zeros(len(phase_region.comp_conds)), loc=0, scale=1000/data_weight/weight)
                 total_zero_prob = np.sum(zero_probs)
                 logging.debug('ZPF error - NaN target hyperplane. Equilibria: ({}), reference: {}. Treating all driving force: 0.0, probability: {}, probabilities: {}'.format(eq_str, dataset_ref, total_zero_prob, zero_probs))
-                prob_error[data_idx] += total_zero_prob
+                prob_error[data_idx, phase_region_idx] += total_zero_prob
                 continue
             # Then calculate the driving force to that hyperplane for each individual vertex
             for vertex_idx in range(len(phase_region.comp_conds)):
@@ -365,8 +366,8 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
                                                                                     approximate_equilibrium=approximate_equilibrium,
                                                                                     )
                 vertex_prob = norm.logpdf(driving_force, loc=0, scale=1000/data_weight/weight)
-                prob_error_gradient[data_idx, :] += -driving_force_gradient * driving_force / (1000/data_weight/weight)**2
-                prob_error[data_idx] += vertex_prob
+                prob_error_gradient[data_idx, phase_region_idx, :] += -driving_force_gradient * driving_force / (1000/data_weight/weight)**2
+                prob_error[data_idx, phase_region_idx] += vertex_prob
                 logging.debug('ZPF error - Equilibria: ({}), current phase: {}, driving force: {}, probability: {}, reference: {}'.format(eq_str, phase_region.region_phases[vertex_idx], driving_force, vertex_prob, dataset_ref))
         data_idx += 1
     return prob_error, prob_error_gradient
