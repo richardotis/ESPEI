@@ -92,6 +92,7 @@ def equilibrium_(species: Sequence[v.Species], phase_records: Dict[str, PhaseRec
 def no_op_equilibrium_(_, phase_records: Dict[str, PhaseRecord],
                        conditions: Dict[v.StateVariable, np.ndarray],
                        grid: LightDataset,
+                       solver: SolverBase,
                        ) -> LightDataset:
     """
     Perform a fast "equilibrium" calculation with virtually no overhead that
