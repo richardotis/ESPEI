@@ -196,7 +196,10 @@ def estimate_hyperplane(phase_region: PhaseRegion, parameters: np.ndarray, appro
             grid = calculate_(dbf, species, phases, str_statevar_dict, models, phase_records, pdens=500, fake_points=True)
             multi_eqdata = _equilibrium(species, phase_records, cond_dict, grid, solver)
             target_hyperplane_phases.append(multi_eqdata.Phase.squeeze())
-            target_hyperplane_chempot_grad = solver.chempot_gradient
+            try:
+                target_hyperplane_chempot_grad = solver.chempot_gradient
+            except AttributeError:
+                target_hyperplane_chempot_grad = np.zeros((len(multi_eqdata.coords['component']), len(parameters)))
             # Does there exist only a single phase in the result with zero internal degrees of freedom?
             # We should exclude those chemical potentials from the average because they are meaningless.
             num_phases = np.sum(multi_eqdata.Phase.squeeze() != '')
@@ -246,9 +249,10 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray,
         driving_force = float(df.max())
         df_idx = df.argmax()
         desired_sitefracs = single_eqdata.Y[..., df_idx, :].squeeze()
-        inp = np.r_[[1, cond_dict[v.P], cond_dict[v.T]], desired_sitefracs, parameters]
-        paramgrad = np.zeros_like(parameters)
-        phase_records[current_phase].parameter_gradient(paramgrad, inp)
+        inp = np.r_[[1.0, cond_dict[v.P], cond_dict[v.T]], desired_sitefracs, parameters]
+        paramgrad = np.zeros_like(parameters, dtype=np.float)
+        if paramgrad.size > 0:
+            phase_records[current_phase].parameter_gradient(paramgrad, inp)
         driving_force_gradient = np.multiply(target_hyperplane_chempot_gradient,
                                              single_eqdata.X[..., df_idx, :].squeeze()[:, np.newaxis]).sum(axis=0) - paramgrad
     elif phase_flag == 'disordered':
@@ -273,7 +277,8 @@ def driving_force_to_hyperplane(target_hyperplane_chempots: np.ndarray,
         # XXX: This should be done using PhaseRecords somehow
         inp = np.r_[[1, cond_dict[v.P], cond_dict[v.T]], desired_sitefracs, parameters]
         paramgrad = np.zeros_like(parameters)
-        phase_records[current_phase].parameter_gradient(paramgrad, inp)
+        if paramgrad.size > 0:
+            phase_records[current_phase].parameter_gradient(paramgrad, inp)
         driving_force_gradient = np.multiply(target_hyperplane_chempot_gradient, single_eqdata.X.squeeze()[:, np.newaxis]).sum(
             axis=0) - paramgrad
         driving_force = np.multiply(target_hyperplane_chempots, single_eqdata.X).sum(axis=-1) - single_eqdata.GM
@@ -339,7 +344,7 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
     """
     if parameters is None:
         parameters = np.array([])
-    max_phase_regions = max([len(data['phase_regions']) for data in zpf_data])
+    max_phase_regions = max([len(data['phase_regions']) for data in zpf_data], default=1)
     prob_error = np.zeros((len(zpf_data), max_phase_regions))
     prob_error_gradient = np.zeros((len(zpf_data), max_phase_regions, len(parameters)))
     data_idx = 0
@@ -366,7 +371,8 @@ def calculate_zpf_error(zpf_data: Sequence[Dict[str, Any]],
                                                                                     approximate_equilibrium=approximate_equilibrium,
                                                                                     )
                 vertex_prob = norm.logpdf(driving_force, loc=0, scale=1000/data_weight/weight)
-                prob_error_gradient[data_idx, phase_region_idx, :] += -driving_force_gradient * driving_force / (1000/data_weight/weight)**2
+                if len(parameters) > 0:
+                    prob_error_gradient[data_idx, phase_region_idx, :] += -driving_force_gradient * driving_force / (1000/data_weight/weight)**2
                 prob_error[data_idx, phase_region_idx] += vertex_prob
                 logging.debug('ZPF error - Equilibria: ({}), current phase: {}, driving force: {}, probability: {}, reference: {}'.format(eq_str, phase_region.region_phases[vertex_idx], driving_force, vertex_prob, dataset_ref))
         data_idx += 1

@@ -4,7 +4,7 @@ Calculate error due to equilibrium thermochemical properties.
 
 import logging
 from collections import OrderedDict
-from typing import NamedTuple, Sequence, Dict, Optional, Tuple
+from typing import NamedTuple, Sequence, Dict, Optional, Tuple, Any
 
 import numpy as np
 import tinydb
@@ -28,7 +28,9 @@ EqPropData = NamedTuple('EqPropData', (('dbf', Database),
                                        ('composition_conds', Sequence[Dict[v.X, float]]),
                                        ('models', Dict[str, Model]),
                                        ('params_keys', Dict[str, float]),
-                                       ('phase_records', Sequence[Dict[str, PhaseRecord]]),
+                                       ('phase_records', Dict[str, PhaseRecord]),
+                                       ('prop_phase_records', Dict[str, PhaseRecord]),
+                                       ('prop_callables', Dict[str, Any]),
                                        ('output', str),
                                        ('samples', np.ndarray),
                                        ('weight', np.ndarray),
@@ -92,7 +94,8 @@ def build_eqpropdata(data: tinydb.database.Document,
     comp_conds = OrderedDict([(v.X(key[2:]), unpack_condition(data['conditions'][key])) for key in sorted(data['conditions'].keys()) if key.startswith('X_')])
 
     phase_records = build_phase_records(dbf, species, data_phases, {**pot_conds, **comp_conds}, models, parameters=parameters, build_gradients=True, build_hessians=True)
-
+    prop_callables = OrderedDict()
+    prop_phase_records = build_phase_records(dbf, species, data_phases, {**pot_conds, **comp_conds}, models, output=output, callables=prop_callables, parameters=parameters, build_gradients=True, build_hessians=False)
     # Now we need to unravel the composition conditions
     # (from Dict[v.X, Sequence[float]] to Sequence[Dict[v.X, float]]), since the
     # composition conditions are only broadcast against the potentials, not
@@ -106,7 +109,7 @@ def build_eqpropdata(data: tinydb.database.Document,
     dataset_weights = np.array(data.get('weight', 1.0)) * np.ones(total_num_calculations)
     weights = (property_std_deviation.get(property_output, 1.0)/data_weight_dict.get(property_output, 1.0)/dataset_weights).flatten()
 
-    return EqPropData(dbf, species, data_phases, pot_conds, rav_comp_conds, models, params_keys, phase_records, output, samples, weights, reference)
+    return EqPropData(dbf, species, data_phases, pot_conds, rav_comp_conds, models, params_keys, phase_records, prop_phase_records, prop_callables, output, samples, weights, reference)
 
 
 def get_equilibrium_thermochemical_data(dbf: Database, comps: Sequence[str],
@@ -162,7 +165,7 @@ def get_equilibrium_thermochemical_data(dbf: Database, comps: Sequence[str],
 def calc_prop_differences(eqpropdata: EqPropData,
                           parameters: np.ndarray,
                           approximate_equilibrium: Optional[bool] = False,
-                          ) -> Tuple[np.ndarray, np.ndarray]:
+                          ) -> Tuple[np.ndarray, np.array, np.ndarray]:
     """
     Calculate differences between the expected and calculated values for a property
 
@@ -179,9 +182,9 @@ def calc_prop_differences(eqpropdata: EqPropData,
 
     Returns
     -------
-    Tuple[np.ndarray, np.ndarray]
-        Pair of
+    Tuple[np.ndarray, np.array, np.ndarray]
         * differences between the calculated property and expected property
+        * gradients of the calculated property with respect to the parameters
         * weights for this dataset
 
     """
@@ -196,41 +199,58 @@ def calc_prop_differences(eqpropdata: EqPropData,
     pot_conds = eqpropdata.potential_conds
     models = eqpropdata.models
     phase_records = eqpropdata.phase_records
+    prop_phase_records = eqpropdata.prop_phase_records
+    prop_callables = eqpropdata.prop_callables
     update_phase_record_parameters(phase_records, parameters)
+    update_phase_record_parameters(prop_phase_records, parameters)
     params_dict = OrderedDict(zip(map(str, eqpropdata.params_keys), parameters))
     output = eqpropdata.output
     weights = np.array(eqpropdata.weight, dtype=np.float)
     samples = np.array(eqpropdata.samples, dtype=np.float)
 
     calculated_data = []
+    calculated_data_gradients = []
     for comp_conds in eqpropdata.composition_conds:
         cond_dict = OrderedDict(**pot_conds, **comp_conds)
         # str_statevar_dict must be sorted, assumes that pot_conds are.
         str_statevar_dict = OrderedDict([(str(key), vals) for key, vals in pot_conds.items()])
         grid = calculate_(dbf, species, phases, str_statevar_dict, models, phase_records, pdens=500, fake_points=True)
-        multi_eqdata = _equilibrium(species, phase_records, cond_dict, grid)
-        # TODO: could be kind of slow. Callables (which are cachable) must be built.
-        propdata = _eqcalculate(dbf, species, phases, cond_dict, output, data=multi_eqdata, per_phase=False, callables=None, parameters=params_dict, model=models)
-
+        multi_eqdata = _equilibrium(species, phase_records, cond_dict, grid, None)
+        propdata = _eqcalculate(dbf, species, phases, cond_dict, output, data=multi_eqdata, per_phase=False, callables=prop_callables, parameters=params_dict, model=models)
+        prop_gradient = np.zeros_like(parameters, dtype=np.float)
+        for phase_name in phases:
+            num_dof = sum([len(x) for x in dbf.phases[phase_name].constituents])
+            current_phase_indices = (multi_eqdata.data_vars['Phase'] == phase_name)
+            if ~np.any(current_phase_indices):
+                continue
+            phase_amt = float(multi_eqdata.data_vars['NP'][np.nonzero(current_phase_indices)])
+            input_dof = np.r_[np.array(list(str_statevar_dict.values())), multi_eqdata.data_vars['Y'][np.nonzero(current_phase_indices)][..., :num_dof]]
+            input_dof = np.array(input_dof, dtype=np.float)
+            param_grad_tmp = np.zeros_like(prop_gradient, dtype=np.float)
+            # TODO: Wrong for order-disorder transitions. Should solve full Jacobian instead
+            prop_phase_records[phase_name].parameter_gradient(param_grad_tmp, input_dof)
+            prop_gradient += phase_amt * param_grad_tmp
         if 'vertex' in propdata.data_vars[output][0]:
             raise ValueError(f"Property {output} cannot be used to calculate equilibrium thermochemical error because each phase has a unique value for this property.")
 
         vals = getattr(propdata, output).flatten().tolist()
         calculated_data.extend(vals)
+        calculated_data_gradients.append(prop_gradient)
 
     calculated_data = np.array(calculated_data, dtype=np.float)
+    calculated_data_gradients = np.array(calculated_data_gradients, dtype=np.float)
 
     assert calculated_data.shape == samples.shape, f"Calculated data shape {calculated_data.shape} does not match samples shape {samples.shape}"
     assert calculated_data.shape == weights.shape, f"Calculated data shape {calculated_data.shape} does not match weights shape {weights.shape}"
     differences = calculated_data - samples
     logging.debug(f'Equilibrium thermochemical error - output: {output} differences: {differences}, weights: {weights}, reference: {eqpropdata.reference}')
-    return differences, weights
+    return differences, calculated_data_gradients, weights
 
 
 def calculate_equilibrium_thermochemical_probability(eq_thermochemical_data: Sequence[EqPropData],
                                                      parameters: np.ndarray,
                                                      approximate_equilibrium: Optional[bool] = False,
-                                                     ) -> float:
+                                                     ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Calculate the total equilibrium thermochemical probability for all EqPropData
 
@@ -246,25 +266,29 @@ def calculate_equilibrium_thermochemical_probability(eq_thermochemical_data: Seq
 
     Returns
     -------
-    float
+    Tuple[np.ndarray, np.ndarray]
         Sum of log-probability for all thermochemical data.
+        Sum of log-probability gradients for all thermochemical data.
 
     """
     if len(eq_thermochemical_data) == 0:
-        return 0.0
+        return np.array(0.0), np.zeros_like(parameters)
 
     differences = []
+    gradients = []
     weights = []
     for eqpropdata in eq_thermochemical_data:
-        diffs, wts = calc_prop_differences(eqpropdata, parameters, approximate_equilibrium)
+        diffs, grads, wts = calc_prop_differences(eqpropdata, parameters, approximate_equilibrium)
         if np.any(np.isinf(diffs) | np.isnan(diffs)):
             # NaN or infinity are assumed calculation failures. If we are
             # calculating log-probability, just bail out and return -infinity.
-            return -np.inf
+            return -np.inf, np.zeros_like(parameters)
         differences.append(diffs)
+        gradients.append(grads)
         weights.append(wts)
-
+    gradients = np.array(gradients, dtype=np.float)
     differences = np.concatenate(differences, axis=0)
     weights = np.concatenate(weights, axis=0)
     probs = norm(loc=0.0, scale=weights).logpdf(differences)
-    return np.sum(probs)
+    probgradients = -gradients * (differences / weights)**2
+    return np.sum(probs), np.sum(probgradients, axis=0)

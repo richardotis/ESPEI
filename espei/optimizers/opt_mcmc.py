@@ -291,10 +291,10 @@ class EmceeOptimizer(OptimizerBase):
         else:
             multi_phase_error = 0
         if equilibrium_thermochemical_kwargs is not None:
-            eq_thermochemical_prob = calculate_equilibrium_thermochemical_probability(parameters=np.array(params), **equilibrium_thermochemical_kwargs)
+            eq_thermochemical_prob, eq_thermochemical_gradient = calculate_equilibrium_thermochemical_probability(parameters=np.array(params), **equilibrium_thermochemical_kwargs)
         else:
             eq_thermochemical_prob = 0
-            multi_phase_error_gradient = np.zeros(len(parameters))
+            eq_thermochemical_gradient = np.zeros(len(parameters))
         if activity_kwargs is not None:
             activity_error = calculate_activity_error(parameters=parameters, **activity_kwargs)
             # TODO
