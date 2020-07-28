@@ -302,9 +302,10 @@ class EmceeOptimizer(OptimizerBase):
         else:
             activity_error = 0
         if non_equilibrium_thermochemical_kwargs is not None:
-            non_eq_thermochemical_prob = calculate_non_equilibrium_thermochemical_probability(parameters=np.array(params), **non_equilibrium_thermochemical_kwargs)
+            non_eq_thermochemical_prob, non_eq_thermochemical_gradient = calculate_non_equilibrium_thermochemical_probability(parameters=np.array(params), **non_equilibrium_thermochemical_kwargs)
         else:
             non_eq_thermochemical_prob = 0
+            non_eq_thermochemical_gradient = np.zeros(len(parameters))
         total_error = multi_phase_error + eq_thermochemical_prob + non_eq_thermochemical_prob + activity_error
         logging.log(TRACE, f'Likelihood - {time.time() - starttime:0.2f}s - Non-equilibrium thermochemical: {non_eq_thermochemical_prob:0.3f}. Equilibrium thermochemical: {eq_thermochemical_prob:0.3f}. ZPF: {multi_phase_error:0.3f}. Activity: {activity_error:0.3f}. Total: {total_error:0.3f}.')
         lnlike = np.array(total_error, dtype=np.float64)

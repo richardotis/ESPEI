@@ -212,7 +212,7 @@ def get_thermochemical_data(dbf, comps, phases, datasets, weight_dict=None, symb
                 str_statevar_dict = OrderedDict((str(k), vals) for k, vals in statevar_dict.items())
                 phase_records = build_phase_records(dbf, species, [phase_name], statevar_dict, model,
                                                     output=output, parameters={s: 0 for s in symbols_to_fit},
-                                                    build_gradients=False, build_hessians=False)
+                                                    build_gradients=True, build_hessians=True)
                 data_dict['str_statevar_dict'] = str_statevar_dict
                 data_dict['phase_records'] = phase_records
                 data_dict['calculate_dict'] = calculate_dict
@@ -240,6 +240,8 @@ def calculate_non_equilibrium_thermochemical_probability(dbf, thermochemical_dat
     -------
     float
         A single float of the residual sum of square errors
+    np.ndarray
+        An array corresponding to the probability gradient with respect to the model parameters
 
     Notes
     -----
@@ -258,6 +260,7 @@ def calculate_non_equilibrium_thermochemical_probability(dbf, thermochemical_dat
         parameters = np.array([])
 
     prob_error = 0.0
+    prob_gradient = np.zeros(len(parameters))
     for data in thermochemical_data:
         phase_name = data['phase_name']
         output = data['output']
@@ -270,8 +273,16 @@ def calculate_non_equilibrium_thermochemical_probability(dbf, thermochemical_dat
                              phase_records, output=output, broadcast=False,
                              points=data['calculate_dict']['points'])[output]
         differences = results - sample_values
+        data_statevar_dict = np.array(list(data['str_statevar_dict'].values())).T
+        input_dof = np.concatenate((data_statevar_dict, data['calculate_dict']['points']), axis=-1)
+        param_grad_tmp = np.zeros_like(parameters, dtype=np.float)
+        if len(param_grad_tmp) > 0:
+            for dof_idx in range(input_dof.shape[0]):
+                phase_records[phase_name].parameter_gradient(param_grad_tmp, input_dof[dof_idx])
+                prob_gradient += -param_grad_tmp * (differences[dof_idx] / data['weights']) ** 2
+                param_grad_tmp[:] = 0
         probabilities = norm.logpdf(differences, loc=0, scale=data['weights'])
         prob_sum = np.sum(probabilities)
         logging.debug(f"Thermochemical error - {data['prop']}({phase_name}) = {prob_sum} - data: {sample_values}, differences: {differences}, probabilities: {probabilities}, references: {data['calculate_dict']['references']}")
         prob_error += prob_sum
-    return prob_error
+    return prob_error, prob_gradient
